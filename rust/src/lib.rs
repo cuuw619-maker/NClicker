@@ -26,10 +26,10 @@ const COUNTRIES: [Country; 10] = [
 const RARITY_NAMES: [&str; 7] = [
     "COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "SECRET",
 ];
-const RARITY_REWARDS: [u64; 7] = [2, 8, 25, 90, 400, 2_500, 15_000];
+const BASE_MARKET_VALUES: [u64; 7] = [100, 150, 300, 750, 2_000, 7_500, 25_000];
 
-/// Seeded lightweight PRNG. Java adds a monotonic-time component and
-/// sequence before crossing JNI, so generation stays local/offline.
+/// Seeded lightweight PRNG. All data stays local; the seed combines a
+/// monotonic clock value and a Java-side sequence.
 struct GameRng(u64);
 
 impl GameRng {
@@ -49,12 +49,20 @@ impl GameRng {
         if upper <= 1 { 0 } else { self.next_u64() % upper }
     }
 
-    fn digit(&mut self) -> char {
-        char::from(b'0' + self.range(10) as u8)
+    fn digits(&mut self, count: usize) -> String {
+        (0..count).map(|_| char::from(b'0' + self.range(10) as u8)).collect()
     }
 
-    fn digits(&mut self, count: usize) -> String {
-        (0..count).map(|_| self.digit()).collect()
+    fn latin_letter(&mut self) -> &'static str {
+        const LETTERS: [&str; 23] = [
+            "A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M",
+            "N", "P", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+        ];
+        LETTERS[self.range(LETTERS.len() as u64) as usize]
+    }
+
+    fn latin_letters(&mut self, count: usize) -> String {
+        (0..count).map(|_| self.latin_letter()).collect()
     }
 
     fn russian_letter(&mut self) -> &'static str {
@@ -75,15 +83,15 @@ fn mix64(mut value: u64) -> u64 {
 }
 
 fn rarity_weights(luck: u32) -> [u64; 7] {
-    let level = luck.min(60) as f64;
+    let level = luck.min(12) as f64;
     [
-        ((60_000.0 / (1.0 + level * 0.075)) as u64).max(4_000),
+        ((60_000.0 / (1.0 + level * 0.10)) as u64).max(4_000),
         24_000,
-        (12_000.0 * (1.0 + level * 0.035)) as u64,
-        (3_000.0 * (1.0 + level * 0.065)) as u64,
-        (800.0 * (1.0 + level * 0.09)) as u64,
-        (170.0 * (1.0 + level * 0.12)) as u64,
-        (30.0 * (1.0 + level * 0.16)) as u64,
+        (12_000.0 * (1.0 + level * 0.06)) as u64,
+        (3_000.0 * (1.0 + level * 0.10)) as u64,
+        (800.0 * (1.0 + level * 0.13)) as u64,
+        (170.0 * (1.0 + level * 0.16)) as u64,
+        (30.0 * (1.0 + level * 0.20)) as u64,
     ]
 }
 
@@ -120,23 +128,51 @@ fn roll_type(rng: &mut GameRng, rarity: usize) -> &'static str {
     }
 }
 
+/// Generate familiar patterns; the values are random and not issued registrations.
 fn make_number(rng: &mut GameRng, code: &str, region: &str) -> String {
     let suffix = region.rsplit('·').next().unwrap_or(region).trim();
     match code {
+        // Russia: one Cyrillic letter, three digits, two Cyrillic letters, region.
         "RU" => format!("{}{}{} {}", rng.russian_letters(1), rng.digits(3), rng.russian_letters(2), suffix),
-        "UA" => format!("{} {} {}", suffix, rng.digits(4), rng.russian_letters(2)),
-        "DE" => format!("{} · NC {}", suffix, rng.digits(4)),
-        "JP" => format!("{} 503 ね {}-{}", suffix, rng.digits(2), rng.digits(2)),
-        "US" => format!("{} · {}NCX{}", suffix, rng.digits(1), rng.digits(3)),
-        "GB" => format!("NC{} NCL", rng.digits(2)),
-        "FR" => format!("NC-{}-ZZ", rng.digits(3)),
-        "AE" => format!("{} · {}", suffix, rng.digits(5)),
-        "PL" => format!("{} {} NC", suffix, rng.digits(3)),
+        // Ukraine: regional prefix, four digits, two Latin letters.
+        "UA" => format!("{} {} {}", suffix, rng.digits(4), rng.latin_letters(2)),
+        // Germany: registration district, one/two letters, four digits.
+        "DE" => format!("{} {} {}", suffix, rng.latin_letters(2), rng.digits(4)),
+        // Japan: class number, kana, and a two-pair serial.
+        "JP" => format!("503 ね {}-{}", rng.digits(2), rng.digits(2)),
+        // Typical California-style plate or state-specific 3 letters + 4 digits.
+        "US" if suffix == "NY" || suffix == "TX" || suffix == "FL" => {
+            format!("{}-{}", rng.latin_letters(3), rng.digits(4))
+        }
+        "US" => format!("{}{}{}", rng.digits(1), rng.latin_letters(3), rng.digits(3)),
+        // United Kingdom: two letters, age identifier, three letters.
+        "GB" => format!("{}{} {}", rng.latin_letters(2), rng.digits(2), rng.latin_letters(3)),
+        // France: AA-123-AA; Poland: region + 3 digits + 2 letters.
+        "FR" => format!("{}-{}-{}", rng.latin_letters(2), rng.digits(3), rng.latin_letters(2)),
+        "AE" => rng.digits(5),
+        "PL" => format!("{} {}{}", suffix, rng.digits(3), rng.latin_letters(2)),
+        "IT" => format!("{} {} {}", rng.latin_letters(2), rng.digits(3), rng.latin_letters(2)),
         _ => format!("NC {} ZZ", rng.digits(3)),
     }
 }
 
-fn generate_plate(seed: u64, luck: u32, bonus: u32) -> String {
+fn category_value_multiplier(kind: &str) -> f64 {
+    if kind.contains("Чёрная") {
+        1.35
+    } else if kind.starts_with("ФСБ") || kind.starts_with("Полиция") {
+        1.25
+    } else if kind == "Такси" {
+        0.90
+    } else if kind == "Дипломатический" {
+        1.60
+    } else if kind == "Ретро" {
+        1.40
+    } else {
+        1.0
+    }
+}
+
+fn generate_plate(seed: u64, luck: u32) -> String {
     let mut rng = GameRng::new(seed);
     let rarity_index = roll_rarity(&mut rng, luck);
     let kind = roll_type(&mut rng, rarity_index);
@@ -148,34 +184,29 @@ fn generate_plate(seed: u64, luck: u32, bonus: u32) -> String {
     let country = COUNTRIES[country_index];
     let region = country.regions[rng.range(country.regions.len() as u64) as usize];
     let number = make_number(&mut rng, country.code, region);
-    let bonus_percent = 100_u64.saturating_add(bonus.min(60) as u64 * 35);
-    let reward = (RARITY_REWARDS[rarity_index]
-        .saturating_mul(bonus_percent) / 100).max(1);
+    let market_value = (BASE_MARKET_VALUES[rarity_index] as f64
+        * category_value_multiplier(kind))
+        .round()
+        .max(50.0) as u64;
     let id = format!("NC-{}-{:08X}", country.code, (rng.next_u64() & 0xFFFF_FFFF) as u32);
 
-    // Interpolated data comes only from static catalogues and our own
-    // digit/letter generator, so values cannot inject JSON delimiters.
+    // Interpolated values come only from static catalogues and controlled
+    // digit/letter alphabets, so they cannot inject JSON delimiters.
     format!(
-        "{{\"id\":\"{}\",\"country\":\"{}\",\"countryCode\":\"{}\",\"flag\":\"{}\",\"region\":\"{}\",\"number\":\"{}\",\"type\":\"{}\",\"rarity\":\"{}\",\"reward\":{}}}",
-        id, country.name, country.code, country.flag, region, number, kind, RARITY_NAMES[rarity_index], reward
+        "{{\"id\":\"{}\",\"country\":\"{}\",\"countryCode\":\"{}\",\"flag\":\"{}\",\"region\":\"{}\",\"number\":\"{}\",\"type\":\"{}\",\"rarity\":\"{}\",\"marketValue\":{}}}",
+        id, country.name, country.code, country.flag, region, number, kind, RARITY_NAMES[rarity_index], market_value
     )
 }
 
-/// JNI entry point. Rust owns rarity rolls, region selection, plate syntax,
-/// category generation and reward balancing.
 #[no_mangle]
 pub extern "system" fn Java_com_nclicker_game_PlateEngine_nativeGenerate<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     seed: jlong,
     luck_level: jint,
-    bonus_level: jint,
+    _broker_level: jint,
 ) -> jstring {
-    let output = generate_plate(
-        seed as u64,
-        luck_level.max(0).min(60) as u32,
-        bonus_level.max(0).min(60) as u32,
-    );
+    let output = generate_plate(seed as u64, luck_level.max(0).min(12) as u32);
     match env.new_string(output) {
         Ok(value) => value.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -188,13 +219,13 @@ mod tests {
 
     #[test]
     fn same_seed_generates_same_plate() {
-        assert_eq!(generate_plate(123_456, 4, 3), generate_plate(123_456, 4, 3));
+        assert_eq!(generate_plate(123_456, 4), generate_plate(123_456, 4));
     }
 
     #[test]
-    fn output_contains_required_fields() {
-        let plate = generate_plate(0xABCD_1234, 0, 0);
-        for field in ["\"country\"", "\"region\"", "\"number\"", "\"rarity\"", "\"reward\""] {
+    fn output_contains_market_value_and_required_fields() {
+        let plate = generate_plate(0xABCD_1234, 0);
+        for field in ["\"country\"", "\"region\"", "\"number\"", "\"rarity\"", "\"marketValue\""] {
             assert!(plate.contains(field), "missing field {field}: {plate}");
         }
     }
@@ -202,16 +233,22 @@ mod tests {
     #[test]
     fn luck_changes_rarity_distribution_weights() {
         let base = rarity_weights(0);
-        let upgraded = rarity_weights(20);
+        let upgraded = rarity_weights(8);
         assert!(upgraded[0] < base[0]);
         assert!(upgraded[2] > base[2]);
         assert!(upgraded[6] > base[6]);
     }
 
     #[test]
-    fn generated_rewards_are_positive() {
-        let plate = generate_plate(98_765, 10, 10);
-        assert!(plate.contains("\"reward\":"));
-        assert!(!plate.contains("\"reward\":0"));
+    fn each_rarity_has_a_market_price() {
+        assert_eq!(BASE_MARKET_VALUES[0], 100);
+        assert!(BASE_MARKET_VALUES.windows(2).all(|pair| pair[1] > pair[0]));
+    }
+
+    #[test]
+    fn generated_plate_uses_a_known_country_code() {
+        let plate = generate_plate(91_234, 2);
+        assert!(plate.contains("\"countryCode\":\""));
+        assert!(plate.contains("\"marketValue\":"));
     }
 }
