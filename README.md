@@ -1,48 +1,48 @@
 # NClicker
 
-NClicker is an Android number-plate collection clicker built with Kotlin, Jetpack Compose and Material 3. Each tap generates a fictional plate design from a country and region, awards in-game credits, and adds the result to the garage.
+NClicker is an Android vehicle-plate collection game with Material 3 Compose UI, a Java game-model/persistence layer, and a Rust native game engine.
 
-## Features
+## Game features
 
-- Material 3 dark interface with bottom navigation.
-- Generated plate designs inspired by Russia, Ukraine, Germany, Japan, the United States, the United Kingdom, France, the UAE, Poland and Italy.
-- Seven rarity tiers, rarity-coloured presentation, animated reveals and rarity-specific tone feedback.
-- Civilian, taxi, police, fictional FSB-themed, black-series, diplomatic and retro categories.
-- Persistent local balance, upgrades, sound setting and a collection capped to the latest 250 finds.
-- Luck and reward upgrades.
-- Kotlin Android UI, a Java plate-format helper, and a Rust JNI ticket generator.
-- GitHub Actions builds a debug APK and uploads it as the **NClicker-debug-apk** artifact.
+- Ten country catalogues with localized regions and generated plate patterns.
+- Seven rarity tiers, rarity-specific rewards, reveal animations and sound signals.
+- Civilian, taxi, police, fictional government-themed, black-series, diplomatic and retro plate categories.
+- Local balance, upgrades, sound preferences and the latest 250 collection items are saved on device.
+- Kotlin / Compose handles presentation, Java owns the plate model and persistence, and Rust via JNI performs rarity rolls, number generation, country/region selection, category selection and reward calculation.
+- Java fallback keeps the game playable in IDE runs where the native library is unavailable.
 
-All numbers and special-series designs are randomly generated for the game. They are fictional and do not identify real vehicles, people, registrations or government vehicles.
+All plate numbers and special series are generated for the game. They are fictional and do not identify real vehicles, people, registrations or government vehicles.
 
-## Build with GitHub Actions
+## Build APK manually
 
-1. Open the **Actions** tab in this repository.
-2. Select **Android APK**.
-3. Choose **Run workflow**, or push a commit to main.
-4. Open the completed run and download **NClicker-debug-apk** from **Artifacts**.
-5. Extract the artifact and install app-debug.apk on an Android device (Android 8.0/API 26 or newer).
+The workflow does not run on each push. To build when you choose:
 
-The workflow installs Java 17, Android SDK 35, NDK 27.2, Rust and the Android NDK linker, compiles the Rust library for arm64-v8a, then runs Gradle assembleDebug.
+1. Open the repository's Actions tab: https://github.com/cuuw619-maker/NClicker/actions
+2. Select Android APK.
+3. Click Run workflow and choose the main branch.
+4. Wait for the run to complete successfully.
+5. Download the NClicker-debug-apk artifact and extract app-debug.apk.
+
+The workflow installs Java 17, Android SDK 35 and NDK 27.2; runs Rust unit tests; compiles the JNI library for arm64-v8a; runs Gradle assembleDebug; and uploads the APK. Minimum Android version is Android 8.0 / API 26.
 
 ## Local development
 
-Open this repository in a recent Android Studio with JDK 17 and Android SDK 35 installed. The app has a Kotlin fallback when the Rust native library has not been built locally; the supplied Actions workflow builds and packages it. To reproduce the full native build, install Rust with the aarch64-linux-android target and the Android NDK, then run the following commands from the repository root:
+Open the project in Android Studio with JDK 17 and Android SDK 35. The Java engine falls back if the Rust native library is not available in an IDE run.
 
-    export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
-    export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+To build the Rust JNI library locally on Linux with the Android NDK:
+
+    rustup target add aarch64-linux-android
+    export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
+    export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+    cargo test --manifest-path rust/Cargo.toml
     cargo build --target aarch64-linux-android --release --manifest-path rust/Cargo.toml
     mkdir -p app/src/main/jniLibs/arm64-v8a
     cp rust/target/aarch64-linux-android/release/libplate_engine.so app/src/main/jniLibs/arm64-v8a/
-
-Then build the debug APK from Android Studio or with Gradle 8.10.2:
-
     gradle --no-daemon assembleDebug
 
 ## Technology
 
-- Kotlin 2.0.21
-- Java 17
-- Rust (cdylib loaded through JNI)
-- Android Gradle Plugin 8.7.3
-- Jetpack Compose / Material 3
+- Kotlin 2.0.21 / Jetpack Compose / Material 3: presentation layer.
+- Java 17: game model, game-engine facade and local collection persistence.
+- Rust with JNI: weighted rarity, plate generation, country/region selection, special categories and reward calculation.
+- Android Gradle Plugin 8.7.3.
