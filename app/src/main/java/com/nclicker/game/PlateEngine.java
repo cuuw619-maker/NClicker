@@ -6,11 +6,8 @@ import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Java gameplay facade. Rust performs rarity rolls, plate formatting,
- * country/region selection, category selection and reward balancing.
- *
- * The Java fallback is intentionally kept for Android Studio previews and
- * devices where the optional native binary has not been built.
+ * Java gameplay facade. Rust generates rarity rolls, country/region, formats
+ * and base market value. Java owns the persisted plate object and sale offer.
  */
 public final class PlateEngine {
     private static final AtomicLong SEQUENCE = new AtomicLong(System.nanoTime());
@@ -30,7 +27,7 @@ public final class PlateEngine {
     private PlateEngine() {
     }
 
-    private static native String nativeGenerate(long seed, int luckLevel, int bonusLevel);
+    private static native String nativeGenerate(long seed, int luckLevel, int brokerLevel);
 
     public static boolean isNativeEngineAvailable() {
         return NATIVE_AVAILABLE;
@@ -39,25 +36,27 @@ public final class PlateEngine {
     public static Plate preview() {
         return new Plate(
                 "preview", "Россия", "RU", "🇷🇺", "Москва · 77",
-                "А777ВС 77", "Гражданский", PlateRarity.COMMON, PlateRarity.COMMON.getReward()
+                "А777ВС 77", "Гражданский", PlateRarity.COMMON, 100L
         );
     }
 
-    public static Plate roll(int luckLevel, int bonusLevel) {
-        int luck = Math.max(0, Math.min(luckLevel, 60));
-        int bonus = Math.max(0, Math.min(bonusLevel, 60));
-
+    public static Plate roll(int luckLevel, int brokerLevel) {
+        int luck = Math.max(0, Math.min(luckLevel, GameEconomy.MAX_LUCK_LEVEL));
+        int broker = Math.max(0, Math.min(brokerLevel, GameEconomy.MAX_BROKER_LEVEL));
         if (NATIVE_AVAILABLE) {
             try {
                 long seed = SEQUENCE.addAndGet(0x9E3779B97F4A7C15L) ^ System.nanoTime();
-                String payload = nativeGenerate(seed, luck, bonus);
-                Plate plate = parseNativePlate(payload);
+                Plate plate = parseNativePlate(nativeGenerate(seed, luck, broker));
                 if (plate != null) return plate;
             } catch (RuntimeException | UnsatisfiedLinkError ignored) {
-                // Keep the game playable if the optional native library cannot run.
+                // Fall back so preview/debug runs remain playable.
             }
         }
-        return fallbackRoll(luck, bonus);
+        return fallbackRoll(luck);
+    }
+
+    public static long salePrice(Plate plate, int brokerLevel) {
+        return GameEconomy.salePrice(plate, brokerLevel);
     }
 
     private static Plate parseNativePlate(String payload) {
@@ -65,6 +64,7 @@ public final class PlateEngine {
         try {
             JSONObject json = new JSONObject(payload);
             PlateRarity rarity = PlateRarity.fromName(json.optString("rarity", "COMMON"));
+            long marketValue = json.optLong("marketValue", rarity.getBaseValue());
             return new Plate(
                     json.optString("id", "native-" + System.nanoTime()),
                     json.optString("country", "Неизвестно"),
@@ -74,21 +74,21 @@ public final class PlateEngine {
                     json.optString("number", "NC 000"),
                     json.optString("type", "Гражданский"),
                     rarity,
-                    json.optLong("reward", rarity.getReward())
+                    Math.max(1L, marketValue)
             );
         } catch (Exception ignored) {
             return null;
         }
     }
 
-    private static Plate fallbackRoll(int luckLevel, int bonusLevel) {
+    private static Plate fallbackRoll(int luckLevel) {
         Random random = new Random(SEQUENCE.addAndGet(0x9E3779B97F4A7C15L) ^ System.nanoTime());
         String[][] countries = {
-                {"Россия", "RU", "🇷🇺", "Москва · 77", "Санкт-Петербург · 78", "Татарстан · 16", "Краснодар · 23"},
-                {"Украина", "UA", "🇺🇦", "Киев · AA", "Львов · BC", "Одесса · BH", "Днепр · AE"},
-                {"Германия", "DE", "🇩🇪", "Берлин · B", "Гамбург · HH", "Мюнхен · M"},
+                {"Россия", "RU", "🇷🇺", "Москва · 77", "Санкт-Петербург · 78", "Татарстан · 16", "Краснодар · 23", "Свердловская область · 66"},
+                {"Украина", "UA", "🇺🇦", "Киев · AA", "Львов · BC", "Одесса · BH", "Харьков · AX", "Днепр · AE"},
+                {"Германия", "DE", "🇩🇪", "Берлин · B", "Гамбург · HH", "Мюнхен · M", "Кёльн · K"},
                 {"Япония", "JP", "🇯🇵", "Токио · 品川", "Осака · なにわ", "Йокогама · 横浜"},
-                {"США", "US", "🇺🇸", "Калифорния · CA", "Нью-Йорк · NY", "Техас · TX"},
+                {"США", "US", "🇺🇸", "Калифорния · CA", "Нью-Йорк · NY", "Техас · TX", "Флорида · FL"},
                 {"Великобритания", "GB", "🇬🇧", "Лондон · LD", "Манчестер · MN", "Уэльс · CY"},
                 {"Франция", "FR", "🇫🇷", "Париж · 75", "Лион · 69", "Марсель · 13"},
                 {"ОАЭ", "AE", "🇦🇪", "Дубай · D", "Абу-Даби · AU", "Шарджа · SH"},
@@ -96,8 +96,8 @@ public final class PlateEngine {
                 {"Италия", "IT", "🇮🇹", "Рим · RM", "Милан · MI", "Турин · TO"}
         };
 
-        long[] weights = weightedRarityWeights(luckLevel);
-        long total = 0;
+        long[] weights = rarityWeights(luckLevel);
+        long total = 0L;
         for (long weight : weights) total += weight;
         long ticket = Math.floorMod(random.nextLong(), total);
         int rarityIndex = 0;
@@ -120,48 +120,77 @@ public final class PlateEngine {
 
         String[] country = countries[type.startsWith("ФСБ") ? 0 : random.nextInt(countries.length)];
         String region = country[3 + random.nextInt(country.length - 3)];
-        String suffix = region.substring(region.lastIndexOf('·') + 1).trim();
-        String number = fallbackNumber(random, country[1], suffix);
-        long reward = (long) Math.min(Long.MAX_VALUE / 2.0,
-                rarity.getReward() * (1.0 + Math.min(bonusLevel, 60) * 0.35));
+        String code = region.substring(region.lastIndexOf('·') + 1).trim();
+        String number = fallbackNumber(random, country[1], code);
+        long baseValue = rarity.getBaseValue();
+        double categoryMultiplier = type.contains("Чёрная") ? 1.35
+                : type.startsWith("ФСБ") ? 1.25
+                : type.startsWith("Полиция") ? 1.20
+                : type.equals("Такси") ? 0.90
+                : type.equals("Дипломатический") ? 1.60
+                : type.equals("Ретро") ? 1.40 : 1.0;
+        long marketValue = Math.max(50L, Math.round(baseValue * categoryMultiplier));
         long id = SEQUENCE.incrementAndGet();
 
         return new Plate(
                 country[1] + "-" + Long.toUnsignedString(id, 36),
-                country[0], country[1], country[2], region, number, type, rarity, Math.max(1L, reward)
+                country[0], country[1], country[2], region, number, type, rarity, marketValue
         );
     }
 
-    private static long[] weightedRarityWeights(int luck) {
-        double level = Math.min(luck, 60);
+    private static long[] rarityWeights(int luck) {
+        double level = Math.min(luck, GameEconomy.MAX_LUCK_LEVEL);
         return new long[] {
-                Math.max(4_000L, (long) (60_000.0 / (1.0 + level * 0.075))),
+                Math.max(4_000L, (long) (60_000.0 / (1.0 + level * 0.10))),
                 24_000L,
-                (long) (12_000.0 * (1.0 + level * 0.035)),
-                (long) (3_000.0 * (1.0 + level * 0.065)),
-                (long) (800.0 * (1.0 + level * 0.09)),
-                (long) (170.0 * (1.0 + level * 0.12)),
-                (long) (30.0 * (1.0 + level * 0.16))
+                (long) (12_000.0 * (1.0 + level * 0.06)),
+                (long) (3_000.0 * (1.0 + level * 0.10)),
+                (long) (800.0 * (1.0 + level * 0.13)),
+                (long) (170.0 * (1.0 + level * 0.16)),
+                (long) (30.0 * (1.0 + level * 0.20))
         };
     }
 
-    private static String fallbackNumber(Random random, String code, String suffix) {
-        String letters = "АВЕКМНОРСТУХ";
-        switch (code) {
+    private static String fallbackNumber(Random random, String countryCode, String regionCode) {
+        switch (countryCode) {
             case "RU":
-                return "" + letters.charAt(random.nextInt(letters.length())) + digits(random, 3)
-                        + letters.charAt(random.nextInt(letters.length()))
-                        + letters.charAt(random.nextInt(letters.length())) + " " + suffix;
-            case "UA": return suffix + " " + digits(random, 4) + " " + letters.charAt(random.nextInt(letters.length()));
-            case "DE": return suffix + " · NC " + digits(random, 4);
-            case "JP": return suffix + " 503 ね " + digits(random, 2) + "-" + digits(random, 2);
-            case "US": return suffix + " · " + digits(random, 1) + "NCX" + digits(random, 3);
-            case "GB": return "NC" + digits(random, 2) + " NCL";
-            case "FR": return "NC-" + digits(random, 3) + "-ZZ";
-            case "AE": return suffix + " · " + digits(random, 5);
-            case "PL": return suffix + " " + digits(random, 3) + " NC";
-            default: return "NC " + digits(random, 3) + " ZZ";
+                return ruLetter(random) + digits(random, 3) + ruLetter(random) + ruLetter(random) + " " + regionCode;
+            case "UA":
+                return regionCode + " " + digits(random, 4) + " " + latinLetters(random, 2);
+            case "DE":
+                return regionCode + " " + latinLetters(random, 2) + " " + digits(random, 4);
+            case "JP":
+                return "503 ね " + digits(random, 2) + "-" + digits(random, 2);
+            case "US":
+                if ("NY".equals(regionCode) || "TX".equals(regionCode) || "FL".equals(regionCode)) {
+                    return latinLetters(random, 3) + "-" + digits(random, 4);
+                }
+                return digits(random, 1) + latinLetters(random, 3) + digits(random, 3);
+            case "GB":
+                return latinLetters(random, 2) + digits(random, 2) + " " + latinLetters(random, 3);
+            case "FR":
+                return latinLetters(random, 2) + "-" + digits(random, 3) + "-" + latinLetters(random, 2);
+            case "AE":
+                return digits(random, 5);
+            case "PL":
+                return regionCode + " " + digits(random, 3) + latinLetters(random, 2);
+            case "IT":
+                return latinLetters(random, 2) + " " + digits(random, 3) + " " + latinLetters(random, 2);
+            default:
+                return "NC " + digits(random, 3) + " ZZ";
         }
+    }
+
+    private static String ruLetter(Random random) {
+        String letters = "АВЕКМНОРСТУХ";
+        return String.valueOf(letters.charAt(random.nextInt(letters.length())));
+    }
+
+    private static String latinLetters(Random random, int count) {
+        String letters = "ABCDEFGHJKLMNPRSTUVWXYZ";
+        StringBuilder value = new StringBuilder(count);
+        for (int i = 0; i < count; i++) value.append(letters.charAt(random.nextInt(letters.length())));
+        return value.toString();
     }
 
     private static String digits(Random random, int count) {
