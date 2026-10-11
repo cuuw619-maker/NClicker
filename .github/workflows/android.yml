@@ -40,13 +40,12 @@ jobs:
         with:
           targets: aarch64-linux-android
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
-
       - name: Build Rust JNI library (ARM64)
         run: |
-          mkdir -p app/src/main/jniLibs
-          cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release --manifest-path rust/Cargo.toml
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          cargo build --target aarch64-linux-android --release --manifest-path rust/Cargo.toml
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp rust/target/aarch64-linux-android/release/libplate_engine.so app/src/main/jniLibs/arm64-v8a/
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
