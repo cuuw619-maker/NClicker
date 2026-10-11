@@ -1,6 +1,6 @@
 package com.nclicker.game;
 
-/** Immutable plate object passed from the game engine to Compose. */
+/** Immutable in-game vehicle registration item. */
 public final class Plate {
     private final String id;
     private final String country;
@@ -10,7 +10,7 @@ public final class Plate {
     private final String number;
     private final String type;
     private final PlateRarity rarity;
-    private final long reward;
+    private final long marketValue;
 
     public Plate(
             String id,
@@ -21,17 +21,17 @@ public final class Plate {
             String number,
             String type,
             PlateRarity rarity,
-            long reward
+            long marketValue
     ) {
         this.id = safe(id, "plate");
-        this.country = safe(country, "Неизвестно");
+        this.country = safe(country, "Unknown");
         this.countryCode = safe(countryCode, "??");
         this.flag = safe(flag, "🏁");
-        this.region = safe(region, "Без региона");
+        this.region = safe(region, "Unknown region");
         this.number = safe(number, "NC 000");
-        this.type = safe(type, "Гражданский");
+        this.type = safe(type, "Civilian");
         this.rarity = rarity == null ? PlateRarity.COMMON : rarity;
-        this.reward = Math.max(1L, reward);
+        this.marketValue = Math.max(1L, marketValue);
     }
 
     private static String safe(String value, String fallback) {
@@ -46,5 +46,9 @@ public final class Plate {
     public String getNumber() { return number; }
     public String getType() { return type; }
     public PlateRarity getRarity() { return rarity; }
-    public long getReward() { return reward; }
+    public long getMarketValue() { return marketValue; }
+
+    /** Compatibility alias for old save data and UI references. */
+    @Deprecated
+    public long getReward() { return marketValue; }
 }
