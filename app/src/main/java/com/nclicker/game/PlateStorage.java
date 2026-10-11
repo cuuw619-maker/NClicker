@@ -50,16 +50,21 @@ public final class PlateStorage {
             int count = Math.min(plates.size(), MAX_ITEMS);
             for (int i = 0; i < count; i++) {
                 Plate plate = plates.get(i);
-                array.put(new JSONObject()
-                        .put("id", plate.getId())
-                        .put("country", plate.getCountry())
-                        .put("countryCode", plate.getCountryCode())
-                        .put("flag", plate.getFlag())
-                        .put("region", plate.getRegion())
-                        .put("number", plate.getNumber())
-                        .put("type", plate.getType())
-                        .put("rarity", plate.getRarity().name())
-                        .put("reward", plate.getReward()));
+                try {
+                    JSONObject item = new JSONObject();
+                    item.put("id", plate.getId());
+                    item.put("country", plate.getCountry());
+                    item.put("countryCode", plate.getCountryCode());
+                    item.put("flag", plate.getFlag());
+                    item.put("region", plate.getRegion());
+                    item.put("number", plate.getNumber());
+                    item.put("type", plate.getType());
+                    item.put("rarity", plate.getRarity().name());
+                    item.put("reward", plate.getReward());
+                    array.put(item);
+                } catch (Exception ignored) {
+                    // Keep the rest of the serializable collection.
+                }
             }
         }
         preferences.edit().putString(KEY, array.toString()).apply();
