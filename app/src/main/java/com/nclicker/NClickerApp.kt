@@ -89,9 +89,10 @@ import com.nclicker.model.Plate
 import com.nclicker.model.PlateCatalog
 import com.nclicker.model.PlateRarity
 import com.nclicker.model.PlateStorage
+import com.nclicker.game.GameEconomy
+import com.nclicker.game.PlateEngine
 import java.text.NumberFormat
 import java.util.Locale
-import kotlin.math.pow
 
 private val Page = Color(0xFF0B0E15)
 private val Panel = Color(0xFF151B27)
@@ -111,29 +112,42 @@ fun NClickerApp() {
     val context = LocalContext.current
     val view = LocalView.current
     val prefs = remember(context) {
-        context.getSharedPreferences("nclicker-game", Context.MODE_PRIVATE)
+        val stored = context.getSharedPreferences("nclicker-game", Context.MODE_PRIVATE)
+        if (stored.getInt("economy_schema", 0) < 2) {
+            stored.edit()
+                .putInt("economy_schema", 2)
+                .putLong("balance", GameEconomy.STARTING_BALANCE)
+                .putInt("luck", 0)
+                .putInt("bonus", 0)
+                .putInt("storage", 0)
+                .apply()
+        }
+        stored
     }
 
-    var balance by remember { mutableLongStateOf(prefs.getLong("balance", 0L)) }
+    var balance by remember { mutableLongStateOf(prefs.getLong("balance", GameEconomy.STARTING_BALANCE)) }
     var totalRolls by remember { mutableIntStateOf(prefs.getInt("rolls", 0)) }
     var luckLevel by remember { mutableIntStateOf(prefs.getInt("luck", 0)) }
-    var bonusLevel by remember { mutableIntStateOf(prefs.getInt("bonus", 0)) }
+    var brokerLevel by remember { mutableIntStateOf(prefs.getInt("bonus", 0)) }
+    var garageLevel by remember { mutableIntStateOf(prefs.getInt("storage", 0)) }
     var soundEnabled by remember { mutableStateOf(prefs.getBoolean("sound", true)) }
     var collection by remember { mutableStateOf(PlateStorage.load(prefs).take(250)) }
     var currentPlate by remember { mutableStateOf(collection.firstOrNull() ?: PlateCatalog.preview()) }
     var rollKey by remember { mutableIntStateOf(0) }
-    var lastReward by remember { mutableLongStateOf(0L) }
+    var lastAction by remember { mutableStateOf("Номер попадает в гараж. Деньги начисляются только после продажи.") }
     var selectedTab by rememberSaveable { mutableStateOf(MainTab.HOME) }
-    var showReveal by remember { mutableStateOf(false) }
     var showResetConfirmation by remember { mutableStateOf(false) }
-    var selectedPlate by remember { mutableStateOf<Plate?>(null) }
 
-    LaunchedEffect(balance, totalRolls, luckLevel, bonusLevel, soundEnabled, collection) {
+    val capacity = GameEconomy.inventoryCapacity(garageLevel)
+
+    LaunchedEffect(balance, totalRolls, luckLevel, brokerLevel, garageLevel, soundEnabled, collection) {
         prefs.edit()
+            .putInt("economy_schema", 2)
             .putLong("balance", balance)
             .putInt("rolls", totalRolls)
             .putInt("luck", luckLevel)
-            .putInt("bonus", bonusLevel)
+            .putInt("bonus", brokerLevel)
+            .putInt("storage", garageLevel)
             .putBoolean("sound", soundEnabled)
             .apply()
         PlateStorage.save(prefs, collection)
@@ -144,45 +158,66 @@ fun NClickerApp() {
     }
 
     fun rollPlate() {
-        val plate = PlateCatalog.roll(luckLevel, bonusLevel)
+        if (collection.size >= capacity) {
+            lastAction = "Гараж заполнен. Продай номер или увеличь вместимость."
+            return
+        }
+        val plate = PlateCatalog.roll(luckLevel, brokerLevel)
         currentPlate = plate
-        lastReward = plate.reward
-        balance += plate.reward
         totalRolls += 1
         collection = (listOf(plate) + collection).take(250)
         rollKey += 1
-        showReveal = plate.rarity.ordinal >= PlateRarity.EPIC.ordinal
+        lastAction = "В гараже новый номер ${plate.number}. Оценка: ${formatCurrency(plate.marketValue)}. Продажа доступна в инвентаре."
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         if (soundEnabled) SoundEffects.play(plate.rarity)
     }
 
-    fun upgradeLuck() {
-        val cost = upgradeCost(150L, luckLevel)
-        if (balance < cost) return
-        balance -= cost
-        luckLevel += 1
-        Toast.makeText(context, "Шанс редких номеров увеличен", Toast.LENGTH_SHORT).show()
+    fun sellPlate(plate: Plate) {
+        val owned = collection.firstOrNull { it.id == plate.id } ?: return
+        val price = PlateEngine.salePrice(owned, brokerLevel)
+        collection = collection.filterNot { it.id == owned.id }
+        balance = if (Long.MAX_VALUE - balance < price) Long.MAX_VALUE else balance + price
+        lastAction = "Продан ${owned.number}: +${formatCurrency(price)}"
+        if (soundEnabled) SoundEffects.play(owned.rarity)
     }
 
-    fun upgradeBonus() {
-        val cost = upgradeCost(100L, bonusLevel)
-        if (balance < cost) return
+    fun upgradeLuck() {
+        val cost = GameEconomy.upgradeCost("luck", luckLevel)
+        if (luckLevel >= GameEconomy.MAX_LUCK_LEVEL || balance < cost) return
         balance -= cost
-        bonusLevel += 1
-        Toast.makeText(context, "Награда за находки увеличена", Toast.LENGTH_SHORT).show()
+        luckLevel += 1
+        lastAction = "Поиск улучшен. Вероятность редких серий выросла."
+    }
+
+    fun upgradeBroker() {
+        val cost = GameEconomy.upgradeCost("broker", brokerLevel)
+        if (brokerLevel >= GameEconomy.MAX_BROKER_LEVEL || balance < cost) return
+        balance -= cost
+        brokerLevel += 1
+        lastAction = "Связи с коллекционерами повышают цену продажи на 12% за уровень."
+    }
+
+    fun upgradeGarage() {
+        val cost = GameEconomy.upgradeCost("garage", garageLevel)
+        if (garageLevel >= GameEconomy.MAX_GARAGE_LEVEL || balance < cost) return
+        balance -= cost
+        garageLevel += 1
+        lastAction = "Гараж расширен: теперь доступно ${GameEconomy.inventoryCapacity(garageLevel)} мест."
     }
 
     fun resetProgress() {
-        balance = 0L
+        balance = GameEconomy.STARTING_BALANCE
         totalRolls = 0
         luckLevel = 0
-        bonusLevel = 0
+        brokerLevel = 0
+        garageLevel = 0
         collection = emptyList()
         currentPlate = PlateCatalog.preview()
-        lastReward = 0L
         rollKey = 0
-        showReveal = false
-        prefs.edit().clear().apply()
+        lastAction = "Новый гараж открыт. Стартовый капитал — ${formatCurrency(GameEconomy.STARTING_BALANCE)}."
+        prefs.edit().clear().putInt("economy_schema", 2)
+            .putLong("balance", GameEconomy.STARTING_BALANCE)
+            .putBoolean("sound", soundEnabled).apply()
         showResetConfirmation = false
     }
 
@@ -201,103 +236,28 @@ fun NClickerApp() {
             }
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(Page)
-        ) {
+        Box(Modifier.fillMaxSize().padding(innerPadding).background(Page)) {
             when (selectedTab) {
                 MainTab.HOME -> HomeScreen(
-                    balance = balance,
-                    totalRolls = totalRolls,
-                    collectionCount = collection.size,
-                    currentPlate = currentPlate,
-                    rollKey = rollKey,
-                    lastReward = lastReward,
-                    luckLevel = luckLevel,
+                    balance = balance, totalRolls = totalRolls, collectionCount = collection.size,
+                    capacity = capacity, currentPlate = currentPlate, rollKey = rollKey,
+                    lastAction = lastAction, luckLevel = luckLevel, canRoll = collection.size < capacity,
                     onRoll = ::rollPlate
                 )
                 MainTab.COLLECTION -> CollectionScreen(
-                    collection = collection,
-                    onOpen = { selectedPlate = it }
+                    collection = collection, brokerLevel = brokerLevel, capacity = capacity, onSell = ::sellPlate
                 )
                 MainTab.UPGRADES -> UpgradesScreen(
-                    balance = balance,
-                    luckLevel = luckLevel,
-                    bonusLevel = bonusLevel,
-                    onUpgradeLuck = ::upgradeLuck,
-                    onUpgradeBonus = ::upgradeBonus
+                    balance = balance, luckLevel = luckLevel, brokerLevel = brokerLevel, garageLevel = garageLevel,
+                    onUpgradeLuck = ::upgradeLuck, onUpgradeBroker = ::upgradeBroker, onUpgradeGarage = ::upgradeGarage
                 )
                 MainTab.SETTINGS -> SettingsScreen(
-                    soundEnabled = soundEnabled,
-                    onSoundChange = { soundEnabled = it },
-                    totalRolls = totalRolls,
-                    collectionCount = collection.size,
+                    soundEnabled = soundEnabled, onSoundChange = { soundEnabled = it },
+                    totalRolls = totalRolls, collectionCount = collection.size, balance = balance,
                     onReset = { showResetConfirmation = true }
                 )
             }
         }
-    }
-
-    if (showReveal) {
-        val plate = currentPlate
-        AlertDialog(
-            onDismissRequest = { showReveal = false },
-            containerColor = Color(0xFF171D2A),
-            icon = { Icon(Icons.Filled.Stars, contentDescription = null, tint = rarityColor(plate.rarity), modifier = Modifier.size(34.dp)) },
-            title = {
-                Text(
-                    when (plate.rarity) {
-                        PlateRarity.EPIC -> "Эпическая находка!"
-                        PlateRarity.LEGENDARY -> "Легендарный номер!"
-                        PlateRarity.MYTHIC -> "Мифический дроп!"
-                        PlateRarity.SECRET -> "СЕКРЕТНЫЙ НОМЕР"
-                        else -> "Новая находка"
-                    },
-                    textAlign = TextAlign.Center,
-                    color = rarityColor(plate.rarity),
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("${plate.flag}  ${plate.country} · ${plate.region}", color = TextMuted, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(14.dp))
-                    PlateVisual(plate = plate)
-                    Spacer(Modifier.height(14.dp))
-                    Text(plate.type, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                    Text("+${formatNumber(plate.reward)} NC", color = Mint, fontWeight = FontWeight.Bold)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showReveal = false }) {
-                    Text("Забрать номер")
-                }
-            }
-        )
-    }
-
-    if (selectedPlate != null) {
-        val plate = selectedPlate!!
-        AlertDialog(
-            onDismissRequest = { selectedPlate = null },
-            containerColor = Color(0xFF171D2A),
-            title = { Text("Детали номера") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PlateVisual(plate = plate)
-                    RarityBadge(plate.rarity)
-                    Text(plate.type, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                    Text(PlateFormat.countryLine(plate.country, plate.region), color = TextMuted)
-                    Text("Награда: ${formatNumber(plate.reward)} NC", color = Mint)
-                    Text("Комбинации в игре сгенерированы случайно и не обозначают конкретное реальное транспортное средство.", color = TextMuted, fontSize = 12.sp)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { selectedPlate = null }) { Text("Закрыть") }
-            }
-        )
     }
 
     if (showResetConfirmation) {
@@ -305,259 +265,265 @@ fun NClickerApp() {
             onDismissRequest = { showResetConfirmation = false },
             containerColor = Color(0xFF171D2A),
             title = { Text("Сбросить прогресс?") },
-            text = { Text("Баланс, улучшения и собранные номера будут удалены без возможности восстановления.") },
+            text = { Text("Баланс вернётся к $3 000, коллекция и улучшения будут сброшены.") },
             confirmButton = {
                 TextButton(onClick = ::resetProgress) { Text("Сбросить", color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = {
-                TextButton(onClick = { showResetConfirmation = false }) { Text("Отмена") }
-            }
+            dismissButton = { TextButton(onClick = { showResetConfirmation = false }) { Text("Отмена") } }
         )
     }
 }
 
 @Composable
 private fun HomeScreen(
-    balance: Long,
-    totalRolls: Int,
-    collectionCount: Int,
-    currentPlate: Plate,
-    rollKey: Int,
-    lastReward: Long,
-    luckLevel: Int,
-    onRoll: () -> Unit
+    balance: Long, totalRolls: Int, collectionCount: Int, capacity: Int,
+    currentPlate: Plate, rollKey: Int, lastAction: String, luckLevel: Int,
+    canRoll: Boolean, onRoll: () -> Unit
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp)
-            .padding(top = 14.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 18.dp).padding(top = 14.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(17.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("НОМЕРНАЯ КОЛЛЕКЦИЯ", color = Mint, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.7.sp)
-                Text("NClicker", color = MaterialTheme.colorScheme.onBackground, fontSize = 31.sp, fontWeight = FontWeight.ExtraBold)
-                Text("Каждый клик — новая история", color = TextMuted, fontSize = 14.sp)
+                Text("PRIVATE REGISTRATION CLUB", color = Mint, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.3.sp)
+                Text("NClicker Garage", color = MaterialTheme.colorScheme.onBackground, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
+                Text("Коллекционирование номерных знаков", color = TextMuted, fontSize = 13.sp)
             }
-            Surface(
-                modifier = Modifier.size(52.dp),
-                color = Color(0xFF202B40),
-                shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(1.dp, Color(0xFF394967))
-            ) {
+            Surface(modifier = Modifier.size(50.dp), color = Color(0xFF202B40), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color(0xFF394967))) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.DirectionsCar, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(27.dp))
+                    Icon(Icons.Filled.DirectionsCar, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
                 }
             }
         }
-
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatTile(
-                modifier = Modifier.weight(1f),
-                label = "Баланс",
-                value = "${formatNumber(balance)} NC",
-                icon = Icons.Filled.Paid,
-                accent = Mint
-            )
-            StatTile(
-                modifier = Modifier.weight(1f),
-                label = "Открыто номеров",
-                value = formatNumber(totalRolls.toLong()),
-                icon = Icons.Filled.CollectionsBookmark,
-                accent = MaterialTheme.colorScheme.primary
-            )
+            StatTile(Modifier.weight(1f), "Доступно средств", formatCurrency(balance), Icons.Filled.Paid, Mint)
+            StatTile(Modifier.weight(1f), "Собрано номеров", formatNumber(totalRolls.toLong()), Icons.Filled.CollectionsBookmark, MaterialTheme.colorScheme.primary)
         }
-
         PlateShowcase(plate = currentPlate, rollKey = rollKey, totalRolls = totalRolls)
-
         Button(
-            onClick = onRoll,
-            modifier = Modifier.fillMaxWidth().height(62.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color(0xFF172448))
+            onClick = onRoll, enabled = canRoll,
+            modifier = Modifier.fillMaxWidth().height(60.dp), shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary, contentColor = Color(0xFF172448),
+                disabledContainerColor = Color(0xFF303849), disabledContentColor = TextMuted
+            )
         ) {
             Icon(Icons.Filled.AutoAwesome, contentDescription = null)
-            Spacer(Modifier.width(10.dp))
-            Text("Получить номер", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(9.dp))
+            Text(if (canRoll) "Получить новый номер" else "Гараж заполнен", fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Последняя награда", color = TextMuted, fontSize = 13.sp)
-                Text(if (lastReward > 0L) "+${formatNumber(lastReward)} NC" else "Нажми, чтобы начать", color = if (lastReward > 0L) Mint else MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-            }
-            Surface(color = PanelRaised, shape = RoundedCornerShape(14.dp)) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Каждый клик добавляет номер в гараж. Баланс не меняется, пока ты не продашь его в инвентаре.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+            Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("Последнее действие", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                Text(lastAction, color = TextMuted, fontSize = 13.sp, lineHeight = 18.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.CollectionsBookmark, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(7.dp))
-                    Text("${collectionCount}/250", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Места в гараже", color = TextMuted, fontSize = 12.sp)
+                    Spacer(Modifier.weight(1f))
+                    Text("$collectionCount / $capacity", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 }
+                LinearProgressIndicator(
+                    progress = if (capacity > 0) collectionCount.toFloat() / capacity else 1f,
+                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                    color = if (collectionCount >= capacity) Color(0xFFFFC976) else Mint, trackColor = Color(0xFF2A3546)
+                )
             }
         }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            colors = CardDefaults.cardColors(containerColor = Panel)
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+            Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.TrendingUp, contentDescription = null, tint = Mint)
-                    Spacer(Modifier.width(9.dp))
-                    Text("Шанс редких серий", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.weight(1f))
-                    Text("Ур. ${luckLevel}", color = Mint, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Рыночная оценка", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 }
-                val progress = (balance.toFloat() / upgradeCost(150L, luckLevel).toFloat()).coerceIn(0f, 1f)
-                LinearProgressIndicator(
-                    progress = progress,
-                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(CircleShape),
-                    color = Mint,
-                    trackColor = Color(0xFF2A3546)
-                )
-                Text("Улучшай удачу во вкладке «Улучшения», чтобы чаще находить редкие номера.", color = TextMuted, fontSize = 12.sp)
+                Text("Обычный номер оценивается примерно в $100. Чем реже серия, тем выше цена коллекционера. Прокачивай поиск, связи с покупателями и вместимость гаража.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Уровень поиска: $luckLevel", color = Mint, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
             }
         }
-
-        Text(
-            "Все номера и спецсерии сгенерированы для игры. Это не база реальных регистраций.",
-            color = TextMuted,
-            fontSize = 11.sp,
-            lineHeight = 16.sp
-        )
+        Text("Номера используют узнаваемые форматы разных стран, но сами комбинации случайные и вымышленные.", color = TextMuted, fontSize = 11.sp, lineHeight = 16.sp)
     }
 }
 
 @Composable
 private fun PlateShowcase(plate: Plate, rollKey: Int, totalRolls: Int) {
     val rarityLevel = plate.rarity.ordinal
-    val scaleTarget = if (rollKey % 2 == 0) 1f else 1.018f + rarityLevel * 0.008f
-    val animationStiffness = when {
-        rarityLevel >= PlateRarity.MYTHIC.ordinal -> 85f
-        rarityLevel >= PlateRarity.LEGENDARY.ordinal -> 145f
-        rarityLevel >= PlateRarity.EPIC.ordinal -> 230f
-        rarityLevel >= PlateRarity.RARE.ordinal -> 340f
-        else -> 520f
+    val scaleTarget = if (rollKey == 0 || rollKey % 2 == 0) 1f else 1.012f + rarityLevel * 0.006f
+    val springTension = when {
+        rarityLevel >= PlateRarity.MYTHIC.ordinal -> 95f
+        rarityLevel >= PlateRarity.LEGENDARY.ordinal -> 150f
+        rarityLevel >= PlateRarity.EPIC.ordinal -> 240f
+        else -> 420f
     }
     val scale by animateFloatAsState(
         targetValue = scaleTarget,
-        animationSpec = spring(
-            dampingRatio = if (rarityLevel >= PlateRarity.LEGENDARY.ordinal) 0.24f else 0.58f,
-            stiffness = animationStiffness
-        ),
+        animationSpec = spring(dampingRatio = if (rarityLevel >= PlateRarity.LEGENDARY.ordinal) 0.30f else 0.62f, stiffness = springTension),
         label = "plate-scale"
     )
     val rotation by animateFloatAsState(
-        targetValue = if (rollKey % 2 == 0) 0f else 0.25f + rarityLevel * 0.62f,
-        animationSpec = spring(
-            dampingRatio = if (rarityLevel >= PlateRarity.MYTHIC.ordinal) 0.22f else 0.42f,
-            stiffness = animationStiffness
-        ),
+        targetValue = if (rollKey == 0 || rollKey % 2 == 0) 0f else (rarityLevel * 0.28f).coerceAtMost(1.6f),
+        animationSpec = spring(dampingRatio = 0.46f, stiffness = springTension),
         label = "plate-rotation"
     )
     Card(
-        modifier = Modifier.fillMaxWidth().graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-            rotationZ = rotation
-        },
-        shape = RoundedCornerShape(28.dp),
+        modifier = Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale; rotationZ = rotation },
+        shape = RoundedCornerShape(24.dp),
         border = BorderStroke(1.dp, rarityColor(plate.rarity).copy(alpha = 0.75f)),
         colors = CardDefaults.cardColors(containerColor = Panel),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (plate.rarity.ordinal >= PlateRarity.LEGENDARY.ordinal) 9.dp else 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = if (rarityLevel >= PlateRarity.LEGENDARY.ordinal) 8.dp else 2.dp)
     ) {
         Column(
-            modifier = Modifier
-                .background(Brush.linearGradient(listOf(Color(0xFF20283A), Color(0xFF151A26), Color(0xFF10141D))))
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.background(Brush.linearGradient(listOf(Color(0xFF20283A), Color(0xFF151A26), Color(0xFF10141D)))).padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RarityBadge(plate.rarity)
                 Spacer(Modifier.weight(1f))
-                Text("+${formatNumber(plate.reward)} NC", color = Mint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(formatCurrency(plate.marketValue), color = Mint, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(plate.flag, fontSize = 25.sp)
-                Spacer(Modifier.width(10.dp))
+                Text(plate.flag, fontSize = 23.sp)
+                Spacer(Modifier.width(9.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(plate.country, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(plate.country, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Text(plate.region, color = TextMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text("#${(totalRolls + if (rollKey == 0) 1 else 0).toString().padStart(4, '0')}", color = TextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                Text("#${(totalRolls.coerceAtLeast(1)).toString().padStart(4, '0')}", color = TextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
             }
             PlateVisual(plate = plate)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Security, contentDescription = null, tint = rarityColor(plate.rarity), modifier = Modifier.size(17.dp))
                 Spacer(Modifier.width(7.dp))
-                Text(plate.type, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(plate.type, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                 Spacer(Modifier.weight(1f))
-                Text(plate.rarity.subtitle, color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(plate.rarity.title, color = rarityColor(plate.rarity), fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
 @Composable
-private fun PlateVisual(plate: Plate, modifier: Modifier = Modifier) {
-    val numberSize = when {
-        plate.number.length >= 16 -> 14.sp
-        plate.number.length >= 13 -> 16.sp
-        else -> 19.sp
+private fun PlateVisual(plate: Plate, modifier: Modifier = Modifier, compact: Boolean = false) {
+    val blackSeries = plate.type.contains("Чёрная", ignoreCase = true)
+    val taxiSeries = plate.type.equals("Такси", ignoreCase = true)
+    val specialSeries = plate.type.contains("Полиция", ignoreCase = true) || plate.type.contains("ФСБ", ignoreCase = true)
+    val plateBg = when {
+        blackSeries -> Color(0xFF171A1D)
+        taxiSeries -> Color(0xFFFFD64A)
+        plate.countryCode == "US" -> Color(0xFFF1EBD5)
+        plate.countryCode == "JP" -> Color(0xFFF2F0E2)
+        else -> Color(0xFFF3F4F1)
+    }
+    val plateInk = if (blackSeries) Color(0xFFF2F2ED) else Color(0xFF171B20)
+    val outline = when {
+        specialSeries -> Color(0xFF3F75B8)
+        blackSeries -> Color(0xFF555C64)
+        taxiSeries -> Color(0xFFAB871E)
+        else -> Color(0xFFB7BEC5)
+    }
+    val plateHeight = if (compact) 58.dp else when (plate.countryCode) {
+        "US", "AE" -> 104.dp
+        "JP" -> 86.dp
+        else -> 74.dp
     }
     Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = Color(0xFFF2F3EE),
-        border = BorderStroke(1.dp, Color(0xFFB8C0C6)),
-        shadowElevation = 5.dp
+        modifier = modifier.fillMaxWidth().height(plateHeight),
+        shape = RoundedCornerShape(if (compact) 7.dp else 10.dp),
+        color = plateBg,
+        border = BorderStroke(if (blackSeries) 1.5.dp else 1.dp, outline),
+        shadowElevation = if (compact) 1.dp else 4.dp
     ) {
-        Row(
-            modifier = Modifier.height(72.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier.width(7.dp).height(72.dp).background(
-                    when (plate.countryCode) {
-                        "UA" -> Color(0xFF5C9DE8)
-                        "RU" -> Color(0xFF7E91B2)
-                        "JP" -> Color(0xFFBC6B76)
-                        else -> Color(0xFF496EB7)
+        when (plate.countryCode) {
+            "RU" -> {
+                val parts = plate.number.trim().split(Regex("\\s+"))
+                val main = if (parts.size > 1) parts.dropLast(1).joinToString(" ") else plate.number
+                val regionCode = parts.lastOrNull() ?: "00"
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxSize().padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 5.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                    ) {
+                        if (!compact) Text("РОССИЯ", color = plateInk.copy(alpha = 0.62f), fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                        Text(main, color = plateInk, fontFamily = FontFamily.Monospace, fontSize = if (compact) 18.sp else 25.sp, fontWeight = FontWeight.Black, letterSpacing = 0.5.sp, maxLines = 1)
                     }
-                )
-            )
-            Column(
-                modifier = Modifier.weight(1f).padding(horizontal = 11.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Text(
-                    PlateFormat.countryLine(plate.country, plate.region),
-                    color = Color(0xFF4B5563),
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    PlateFormat.normalize(plate.number),
-                    color = Color(0xFF171B20),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = numberSize,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 0.7.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                    Box(Modifier.width(1.dp).fillMaxSize().background(outline.copy(alpha = 0.8f)))
+                    Column(
+                        modifier = Modifier.width(if (compact) 45.dp else 54.dp).fillMaxSize().padding(horizontal = 3.dp, vertical = 3.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(regionCode, color = plateInk, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = if (compact) 13.sp else 16.sp)
+                        if (!compact) {
+                            Text("RUS", color = plateInk, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                            Row(Modifier.fillMaxWidth(0.65f).height(4.dp)) {
+                                Box(Modifier.weight(1f).fillMaxSize().background(Color.White))
+                                Box(Modifier.weight(1f).fillMaxSize().background(Color(0xFF3768C4)))
+                                Box(Modifier.weight(1f).fillMaxSize().background(Color(0xFFD84A4A)))
+                            }
+                        }
+                    }
+                }
             }
-            Column(
-                modifier = Modifier.width(41.dp).padding(end = 9.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+            "US" -> Column(
+                modifier = Modifier.fillMaxSize().padding(horizontal = if (compact) 6.dp else 11.dp, vertical = if (compact) 4.dp else 7.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(plate.countryCode, color = Color(0xFF303B4E), fontSize = 10.sp, fontWeight = FontWeight.ExtraBold)
-                Text(plate.flag, fontSize = 15.sp)
+                Text(plate.region.substringBefore("·").trim().uppercase(Locale.US), color = if (blackSeries) plateInk else Color(0xFF275449), fontSize = if (compact) 7.sp else 10.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, maxLines = 1)
+                Text(plate.number, color = plateInk, fontFamily = FontFamily.Monospace, fontSize = if (compact) 17.sp else 25.sp, fontWeight = FontWeight.Black, letterSpacing = 0.8.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!compact) Text("MOTOR VEHICLE  •  USA", color = Color(0xFF52645D), fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            }
+            "JP" -> {
+                val chunks = plate.number.split(Regex("\\s+"))
+                val main = chunks.lastOrNull() ?: plate.number
+                val classAndKana = chunks.dropLast(1).joinToString(" ")
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 11.dp, vertical = 5.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("${plate.region.substringAfter("·").trim()}  $classAndKana", color = Color(0xFF3C5748), fontSize = if (compact) 8.sp else 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text(main, color = plateInk, fontFamily = FontFamily.Monospace, fontSize = if (compact) 17.sp else 27.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp, maxLines = 1)
+                }
+            }
+            "AE" -> {
+                val code = plate.region.substringAfter("·").trim()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).fillMaxSize().padding(start = 10.dp, top = 4.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+                        Text("DUBAI  •  PRIVATE", color = Color(0xFF4B555F), fontSize = if (compact) 7.sp else 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+                        Text(plate.number, color = plateInk, fontFamily = FontFamily.Monospace, fontSize = if (compact) 18.sp else 28.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp, maxLines = 1)
+                    }
+                    Column(Modifier.width(if (compact) 38.dp else 48.dp).fillMaxSize().background(Color(0xFFE1E5E6)), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Text(code, color = Color(0xFF28333D), fontWeight = FontWeight.ExtraBold, fontSize = if (compact) 14.sp else 19.sp)
+                        if (!compact) Text("UAE", color = Color(0xFF57616A), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            else -> {
+                val regionId = plate.region.substringAfter("·").trim()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (plate.countryCode in listOf("UA", "DE", "FR", "PL", "IT", "GB")) {
+                        Column(
+                            modifier = Modifier.width(if (compact) 25.dp else 30.dp).fillMaxSize().background(Color(0xFF244D9B)),
+                            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                        ) {
+                            if (!compact && plate.countryCode != "GB" && plate.countryCode != "UA") Text("★", color = Color(0xFFFFD75C), fontSize = 9.sp)
+                            Text(when (plate.countryCode) {
+                                "UA" -> "UA"; "DE" -> "D"; "FR" -> "F"; "PL" -> "PL"; "IT" -> "I"; else -> "UK"
+                            }, color = Color.White, fontSize = if (compact) 8.sp else 10.sp, fontWeight = FontWeight.ExtraBold)
+                            if (plate.countryCode == "UA" && !compact) Box(Modifier.width(15.dp).height(3.dp).background(Color(0xFFFFD64A)))
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxSize().padding(horizontal = if (compact) 8.dp else 12.dp, vertical = if (compact) 3.dp else 5.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                    ) {
+                        if (plate.countryCode == "DE" && !compact) Text("ZULASSUNGSBEZIRK  $regionId", color = Color(0xFF5E6770), fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+                        else if (plate.countryCode == "FR" && !compact) Text("RÉPUBLIQUE FRANÇAISE", color = Color(0xFF5E6770), fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                        else if (plate.countryCode == "IT" && !compact) Text("REPUBBLICA ITALIANA", color = Color(0xFF5E6770), fontSize = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                        Text(plate.number, color = plateInk, fontFamily = FontFamily.Monospace, fontSize = if (compact) 17.sp else 23.sp, fontWeight = FontWeight.Black, letterSpacing = if (compact) 0.sp else 0.7.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
             }
         }
     }
@@ -604,48 +570,42 @@ private fun StatTile(
 }
 
 @Composable
-private fun CollectionScreen(collection: List<Plate>, onOpen: (Plate) -> Unit) {
+private fun CollectionScreen(collection: List<Plate>, brokerLevel: Int, capacity: Int, onSell: (Plate) -> Unit) {
     val filters = listOf("Все", "Такси", "Полиция", "ФСБ", "Чёрная", "Дипломатический", "Ретро")
     var filter by rememberSaveable { mutableStateOf("Все") }
     val filtered = remember(collection, filter) {
         if (filter == "Все") collection else collection.filter { it.type.contains(filter, ignoreCase = true) }
     }
+    val totalOffer = collection.sumOf { PlateEngine.salePrice(it, brokerLevel) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp).padding(top = 16.dp)) {
-        Text("ТВОЙ ГАРАЖ", color = Mint, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.7.sp)
-        Text("Коллекция", color = MaterialTheme.colorScheme.onBackground, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-        Text("${collection.size} из 250 последних находок", color = TextMuted, fontSize = 13.sp)
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            filters.forEach { item ->
-                FilterChip(
-                    selected = filter == item,
-                    onClick = { filter = item },
-                    label = { Text(item) }
-                )
-            }
+        Text("ЛИЧНАЯ КОЛЛЕКЦИЯ", color = Mint, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+        Text("Инвентарь", color = MaterialTheme.colorScheme.onBackground, fontSize = 29.sp, fontWeight = FontWeight.ExtraBold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${collection.size} номеров · гараж $capacity мест", color = TextMuted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text("Оценка: ${formatCurrency(totalOffer)}", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            filters.forEach { item -> FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item) }) }
+        }
+        Spacer(Modifier.height(10.dp))
 
         if (filtered.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Filled.CollectionsBookmark, contentDescription = null, tint = TextMuted, modifier = Modifier.size(42.dp))
-                    Text(if (collection.isEmpty()) "Коллекция пока пуста" else "В этой серии пока нет номеров", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
-                    Text("Возвращайся на главную и получи первый номер.", color = TextMuted, fontSize = 12.sp, textAlign = TextAlign.Center)
+                    Text(if (collection.isEmpty()) "Инвентарь пуст" else "Номеров такой серии пока нет", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    Text("Получи новый номер на главной. Деньги придут только после продажи.", color = TextMuted, fontSize = 12.sp, textAlign = TextAlign.Center)
                 }
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 22.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(filtered, key = { it.id }) { plate ->
-                    CollectionPlateRow(plate = plate, onClick = { onOpen(plate) })
+                    CollectionPlateRow(plate, PlateEngine.salePrice(plate, brokerLevel)) { onSell(plate) }
                 }
             }
         }
@@ -653,130 +613,113 @@ private fun CollectionScreen(collection: List<Plate>, onOpen: (Plate) -> Unit) {
 }
 
 @Composable
-private fun CollectionPlateRow(plate: Plate, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(Panel)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun CollectionPlateRow(plate: Plate, offer: Long, onSell: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        border = BorderStroke(1.dp, Color(0xFF283246))
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PlateVisual(plate = plate, compact = true)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(plate.flag, fontSize = 18.sp)
-                Spacer(Modifier.width(7.dp))
-                Text(plate.country, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("${plate.flag}  ${plate.country}", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${plate.region} · ${plate.type}", color = TextMuted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.width(8.dp))
+                RarityBadge(plate.rarity)
             }
-            Surface(color = Color(0xFFF2F3EE), shape = RoundedCornerShape(8.dp)) {
-                Text(
-                    PlateFormat.normalize(plate.number),
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
-                    color = Color(0xFF171B20),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Оценка рынка", color = TextMuted, fontSize = 10.sp)
+                    Text(formatCurrency(offer), color = Mint, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+                }
+                Button(onClick = onSell, modifier = Modifier.height(44.dp), shape = RoundedCornerShape(13.dp), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp)) {
+                    Text("Продать")
+                }
             }
-            Text(plate.type, color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Spacer(Modifier.width(10.dp))
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            RarityBadge(plate.rarity)
-            Text("+${formatNumber(plate.reward)} NC", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text(plate.region, color = TextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
 private fun UpgradesScreen(
-    balance: Long,
-    luckLevel: Int,
-    bonusLevel: Int,
-    onUpgradeLuck: () -> Unit,
-    onUpgradeBonus: () -> Unit
+    balance: Long, luckLevel: Int, brokerLevel: Int, garageLevel: Int,
+    onUpgradeLuck: () -> Unit, onUpgradeBroker: () -> Unit, onUpgradeGarage: () -> Unit
 ) {
+    val luckCost = GameEconomy.upgradeCost("luck", luckLevel)
+    val brokerCost = GameEconomy.upgradeCost("broker", brokerLevel)
+    val garageCost = GameEconomy.upgradeCost("garage", garageLevel)
+    val capacity = GameEconomy.inventoryCapacity(garageLevel)
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(top = 16.dp, bottom = 26.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(15.dp)
     ) {
-        Text("РАЗВИТИЕ ГАРАЖА", color = Mint, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.7.sp)
-        Text("Улучшения", color = MaterialTheme.colorScheme.onBackground, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-        Surface(color = Panel, shape = RoundedCornerShape(20.dp)) {
-            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Paid, contentDescription = null, tint = Mint, modifier = Modifier.size(26.dp))
+        Text("РАЗВИТИЕ КОЛЛЕКЦИИ", color = Mint, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+        Text("Улучшения", color = MaterialTheme.colorScheme.onBackground, fontSize = 29.sp, fontWeight = FontWeight.ExtraBold)
+        Surface(color = Panel, shape = RoundedCornerShape(18.dp)) {
+            Row(Modifier.fillMaxWidth().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Paid, contentDescription = null, tint = Mint, modifier = Modifier.size(25.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Твой баланс", color = TextMuted, fontSize = 12.sp)
-                    Text("${formatNumber(balance)} NC", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                    Text("Свободный капитал", color = TextMuted, fontSize = 12.sp)
+                    Text(formatCurrency(balance), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.ExtraBold, fontSize = 23.sp)
                 }
             }
         }
         UpgradeCard(
-            icon = Icons.Filled.Stars,
-            title = "Интуиция коллекционера",
-            description = "Повышает шанс выпадения редких и легендарных комбинаций. Каждый уровень смещает бросок в сторону редкости.",
-            level = luckLevel,
-            cost = upgradeCost(150L, luckLevel),
-            canBuy = balance >= upgradeCost(150L, luckLevel),
-            actionLabel = "Улучшить шанс",
-            onClick = onUpgradeLuck
+            icon = Icons.Filled.Stars, title = "Поиск редких комбинаций",
+            description = "Профессиональный поиск повышает вероятность находить редкие серии. Максимум 12 уровней.",
+            level = luckLevel, maxLevel = GameEconomy.MAX_LUCK_LEVEL, cost = luckCost,
+            canBuy = balance >= luckCost, actionLabel = "Улучшить поиск", onClick = onUpgradeLuck
         )
         UpgradeCard(
-            icon = Icons.Filled.TrendingUp,
-            title = "Торговая площадка",
-            description = "Увеличивает награду за каждый найденный номер на 35% за уровень.",
-            level = bonusLevel,
-            cost = upgradeCost(100L, bonusLevel),
-            canBuy = balance >= upgradeCost(100L, bonusLevel),
-            actionLabel = "Увеличить награду",
-            onClick = onUpgradeBonus
+            icon = Icons.Filled.TrendingUp, title = "Связи с коллекционерами",
+            description = "Покупатели платят на 12% больше за уровень. Бонус применяется при продаже и старых, и новых номеров.",
+            level = brokerLevel, maxLevel = GameEconomy.MAX_BROKER_LEVEL, cost = brokerCost,
+            canBuy = balance >= brokerCost, actionLabel = "Развить связи", onClick = onUpgradeBroker
         )
-        Text("Стоимость растёт с каждым уровнем. Улучшения и баланс сохраняются на устройстве.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+        UpgradeCard(
+            icon = Icons.Filled.DirectionsCar, title = "Вместительный гараж",
+            description = "Каждый уровень добавляет 20 мест для хранения. Вместимость растёт с 30 до 150 номеров. Сейчас: $capacity мест.",
+            level = garageLevel, maxLevel = GameEconomy.MAX_GARAGE_LEVEL, cost = garageCost,
+            canBuy = balance >= garageCost, actionLabel = "Расширить гараж", onClick = onUpgradeGarage
+        )
+        Text("Улучшения покупаются за деньги от продаж. Получение номера не начисляет валюту и не тратит баланс.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
     }
 }
 
 @Composable
 private fun UpgradeCard(
-    icon: ImageVector,
-    title: String,
-    description: String,
-    level: Int,
-    cost: Long,
-    canBuy: Boolean,
-    actionLabel: String,
-    onClick: () -> Unit
+    icon: ImageVector, title: String, description: String,
+    level: Int, maxLevel: Int, cost: Long, canBuy: Boolean, actionLabel: String, onClick: () -> Unit
 ) {
+    val maxed = level >= maxLevel
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = Panel),
         border = BorderStroke(1.dp, Color(0xFF283246))
     ) {
-        Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = Color(0xFF26334B), shape = RoundedCornerShape(15.dp), modifier = Modifier.size(48.dp)) {
+                Surface(color = Color(0xFF26334B), shape = RoundedCornerShape(14.dp), modifier = Modifier.size(46.dp)) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(25.dp))
+                        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                     }
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(11.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(title, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text("Уровень $level", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(title, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(if (maxed) "MAX · $level/$maxLevel" else "Уровень $level / $maxLevel", color = Mint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-            Text(description, color = TextMuted, fontSize = 13.sp, lineHeight = 19.sp)
+            Text(description, color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
             Button(
-                onClick = onClick,
-                enabled = canBuy,
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(15.dp)
+                onClick = onClick, enabled = canBuy && !maxed,
+                modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(14.dp)
             ) {
-                Text("$actionLabel · ${formatNumber(cost)} NC", fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(if (maxed) "Максимальный уровень" else "$actionLabel · ${formatCurrency(cost)}", fontWeight = FontWeight.Bold, maxLines = 1)
             }
         }
     }
@@ -784,68 +727,60 @@ private fun UpgradeCard(
 
 @Composable
 private fun SettingsScreen(
-    soundEnabled: Boolean,
-    onSoundChange: (Boolean) -> Unit,
-    totalRolls: Int,
-    collectionCount: Int,
-    onReset: () -> Unit
+    soundEnabled: Boolean, onSoundChange: (Boolean) -> Unit,
+    totalRolls: Int, collectionCount: Int, balance: Long, onReset: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(top = 16.dp, bottom = 26.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(15.dp)
     ) {
-        Text("ПЕРСОНАЛИЗАЦИЯ", color = Mint, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.7.sp)
-        Text("Настройки", color = MaterialTheme.colorScheme.onBackground, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Text("ПЕРСОНАЛИЗАЦИЯ", color = Mint, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+        Text("Настройки", color = MaterialTheme.colorScheme.onBackground, fontSize = 29.sp, fontWeight = FontWeight.ExtraBold)
 
-        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+            Row(Modifier.fillMaxWidth().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (soundEnabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(25.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Звуки находок", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                    Text("Звук меняется в зависимости от редкости.", color = TextMuted, fontSize = 12.sp)
+                    Text("Сигналы зависят от редкости номера.", color = TextMuted, fontSize = 12.sp)
                 }
                 Switch(checked = soundEnabled, onCheckedChange = onSoundChange)
             }
         }
 
-        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Info, contentDescription = null, tint = Mint, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text("Об игре", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Spacer(Modifier.width(9.dp))
+                    Text("Экономика и сохранение", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
-                Text("NClicker — коллекционный кликер с номерными знаками разных стран, уровнями редкости, улучшениями и звуковыми эффектами.", color = TextMuted, fontSize = 13.sp, lineHeight = 19.sp)
-                Text("Номера, регионы и специальные серии генерируются для игры. Они вымышленные и не являются проверкой реальных регистраций, документов или принадлежности к ведомствам.", color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
-                Text("Кликов: ${formatNumber(totalRolls.toLong())}     •     В коллекции: $collectionCount", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                Text("Стартовый капитал — $3 000. Получение номера не начисляет деньги. Каждый номер хранится в инвентаре и продаётся отдельно по рыночной цене.", color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("Баланс: ${formatCurrency(balance)}", color = Mint, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("Получено номеров: ${formatNumber(totalRolls.toLong())} · Сейчас в гараже: $collectionCount", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
+                Text("Форматы номеров похожи на стандарты стран, но комбинации случайные и вымышленные.", color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
-
         Button(
-            onClick = onReset,
-            modifier = Modifier.fillMaxWidth().height(54.dp),
-            shape = RoundedCornerShape(16.dp),
+            onClick = onReset, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(15.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF442A34), contentColor = Color(0xFFFFC2CC))
         ) {
             Icon(Icons.Filled.RestartAlt, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Сбросить весь прогресс", fontWeight = FontWeight.Bold)
+            Text("Сбросить прогресс", fontWeight = FontWeight.Bold)
         }
-        Text("Версия 1.0.0 · Material 3 · Kotlin + Java + Rust", color = TextMuted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        Text("Material 3 · Kotlin UI · Java economy · Rust game engine", color = TextMuted, fontSize = 11.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
     }
 }
-
-private fun upgradeCost(base: Long, level: Int): Long =
-    (base.toDouble() * 1.72.pow(level.coerceAtMost(20))).toLong().coerceAtLeast(base)
 
 private fun rarityColor(rarity: PlateRarity): Color = Color(rarity.colorHex)
 
 private fun formatNumber(value: Long): String =
-    NumberFormat.getIntegerInstance(Locale.getDefault()).format(value)
+    NumberFormat.getIntegerInstance(Locale.US).format(value)
+
+private fun formatCurrency(value: Long): String =
+    "$" + NumberFormat.getIntegerInstance(Locale.US).format(value.coerceAtLeast(0L))
 
 private object SoundEffects {
     private var generator: ToneGenerator? = null
