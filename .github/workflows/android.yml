@@ -36,6 +36,9 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Test Rust game logic
+        run: cargo test --manifest-path rust/Cargo.toml
+
       - name: Build Rust JNI library (ARM64)
         run: |
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
