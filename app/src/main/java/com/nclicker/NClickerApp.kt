@@ -265,7 +265,7 @@ fun NClickerApp() {
             onDismissRequest = { showResetConfirmation = false },
             containerColor = Color(0xFF171D2A),
             title = { Text("Сбросить прогресс?") },
-            text = { Text("Баланс вернётся к $3 000, коллекция и улучшения будут сброшены.") },
+            text = { Text("Баланс вернётся к \$3 000, коллекция и улучшения будут сброшены.") },
             confirmButton = {
                 TextButton(onClick = ::resetProgress) { Text("Сбросить", color = MaterialTheme.colorScheme.error) }
             },
@@ -327,7 +327,7 @@ private fun HomeScreen(
                     Text("$collectionCount / $capacity", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 }
                 LinearProgressIndicator(
-                    progress = if (capacity > 0) collectionCount.toFloat() / capacity else 1f,
+                    progress = if (capacity > 0) (collectionCount.toFloat() / capacity).coerceIn(0f, 1f) else 1f,
                     modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
                     color = if (collectionCount >= capacity) Color(0xFFFFC976) else Mint, trackColor = Color(0xFF2A3546)
                 )
@@ -340,7 +340,7 @@ private fun HomeScreen(
                     Spacer(Modifier.width(8.dp))
                     Text("Рыночная оценка", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                 }
-                Text("Обычный номер оценивается примерно в $100. Чем реже серия, тем выше цена коллекционера. Прокачивай поиск, связи с покупателями и вместимость гаража.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
+                Text("Обычный номер оценивается примерно в \$100. Чем реже серия, тем выше цена коллекционера. Прокачивай поиск, связи с покупателями и вместимость гаража.", color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                 Text("Уровень поиска: $luckLevel", color = Mint, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
             }
         }
@@ -490,7 +490,11 @@ private fun PlateVisual(plate: Plate, modifier: Modifier = Modifier, compact: Bo
                 val code = plate.region.substringAfter("·").trim()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).fillMaxSize().padding(start = 10.dp, top = 4.dp, bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
-                        Text("DUBAI  •  PRIVATE", color = Color(0xFF4B555F), fontSize = if (compact) 7.sp else 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
+                        Text(
+                            when (code) { "D" -> "DUBAI  •  PRIVATE"; "AU" -> "ABU DHABI  •  PRIVATE"; "SH" -> "SHARJAH  •  PRIVATE"; else -> "UAE  •  PRIVATE" },
+                            color = Color(0xFF4B555F), fontSize = if (compact) 7.sp else 9.sp,
+                            fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp
+                        )
                         Text(plate.number, color = plateInk, fontFamily = FontFamily.Monospace, fontSize = if (compact) 18.sp else 28.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp, maxLines = 1)
                     }
                     Column(Modifier.width(if (compact) 38.dp else 48.dp).fillMaxSize().background(Color(0xFFE1E5E6)), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -756,7 +760,7 @@ private fun SettingsScreen(
                     Spacer(Modifier.width(9.dp))
                     Text("Экономика и сохранение", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
-                Text("Стартовый капитал — $3 000. Получение номера не начисляет деньги. Каждый номер хранится в инвентаре и продаётся отдельно по рыночной цене.", color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
+                Text("Стартовый капитал — \$3 000. Получение номера не начисляет деньги. Каждый номер хранится в инвентаре и продаётся отдельно по рыночной цене.", color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
                 Text("Баланс: ${formatCurrency(balance)}", color = Mint, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Text("Получено номеров: ${formatNumber(totalRolls.toLong())} · Сейчас в гараже: $collectionCount", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
                 Text("Форматы номеров похожи на стандарты стран, но комбинации случайные и вымышленные.", color = TextMuted, fontSize = 12.sp, lineHeight = 18.sp)
@@ -780,7 +784,7 @@ private fun formatNumber(value: Long): String =
     NumberFormat.getIntegerInstance(Locale.US).format(value)
 
 private fun formatCurrency(value: Long): String =
-    "$" + NumberFormat.getIntegerInstance(Locale.US).format(value.coerceAtLeast(0L))
+    "\$" + NumberFormat.getIntegerInstance(Locale.US).format(value.coerceAtLeast(0L))
 
 private object SoundEffects {
     private var generator: ToneGenerator? = null
