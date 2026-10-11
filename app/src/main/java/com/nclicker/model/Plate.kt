@@ -67,7 +67,7 @@ object PlateCatalog {
     )
 
     fun roll(luckLevel: Int, bonusLevel: Int): Plate {
-        val ticket = (NativeEngine.nextTicket(100_000) - luckLevel * 1_450).coerceAtLeast(0)
+        val ticket = (NativeEngine.nextTicket(100_000) + luckLevel * 1_450).coerceAtMost(99_999)
         val rarity = when {
             ticket < 60_000 -> PlateRarity.COMMON
             ticket < 84_000 -> PlateRarity.UNCOMMON
