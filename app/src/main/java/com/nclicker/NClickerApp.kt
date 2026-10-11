@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -433,18 +432,29 @@ private fun HomeScreen(
 
 @Composable
 private fun PlateShowcase(plate: Plate, rollKey: Int, totalRolls: Int) {
-    val scaleTarget = if (rollKey % 2 == 0) 1f else if (plate.rarity.ordinal >= PlateRarity.LEGENDARY.ordinal) 1.045f else 1.018f
+    val rarityLevel = plate.rarity.ordinal
+    val scaleTarget = if (rollKey % 2 == 0) 1f else 1.018f + rarityLevel * 0.008f
+    val animationStiffness = when {
+        rarityLevel >= PlateRarity.MYTHIC.ordinal -> 85f
+        rarityLevel >= PlateRarity.LEGENDARY.ordinal -> 145f
+        rarityLevel >= PlateRarity.EPIC.ordinal -> 230f
+        rarityLevel >= PlateRarity.RARE.ordinal -> 340f
+        else -> 520f
+    }
     val scale by animateFloatAsState(
         targetValue = scaleTarget,
         animationSpec = spring(
-            dampingRatio = if (plate.rarity.ordinal >= PlateRarity.LEGENDARY.ordinal) 0.38f else 0.72f,
-            stiffness = if (plate.rarity.ordinal >= PlateRarity.MYTHIC.ordinal) 330f else 520f
+            dampingRatio = if (rarityLevel >= PlateRarity.LEGENDARY.ordinal) 0.24f else 0.58f,
+            stiffness = animationStiffness
         ),
         label = "plate-scale"
     )
     val rotation by animateFloatAsState(
-        targetValue = if (rollKey % 2 == 0) 0f else if (plate.rarity.ordinal >= PlateRarity.EPIC.ordinal) 1.2f else 0.25f,
-        animationSpec = spring(dampingRatio = 0.45f, stiffness = 350f),
+        targetValue = if (rollKey % 2 == 0) 0f else 0.25f + rarityLevel * 0.62f,
+        animationSpec = spring(
+            dampingRatio = if (rarityLevel >= PlateRarity.MYTHIC.ordinal) 0.22f else 0.42f,
+            stiffness = animationStiffness
+        ),
         label = "plate-rotation"
     )
     Card(
@@ -789,7 +799,7 @@ private fun SettingsScreen(
 
         Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { onSoundChange(!soundEnabled) }.padding(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(if (soundEnabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(25.dp))
