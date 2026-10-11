@@ -1,48 +1,37 @@
 # NClicker
 
-NClicker is an Android vehicle-plate collection game with Material 3 Compose UI, a Java game-model/persistence layer, and a Rust native game engine.
+NClicker is an Android number-plate collection game. Jetpack Compose and Material 3 handle presentation, Java owns the game model and economy, and Rust generates plates through JNI.
 
-## Game features
+## Gameplay
 
-- Ten country catalogues with localized regions and generated plate patterns.
-- Seven rarity tiers, rarity-specific rewards, reveal animations and sound signals.
-- Civilian, taxi, police, fictional government-themed, black-series, diplomatic and retro plate categories.
-- Local balance, upgrades, sound preferences and the latest 250 collection items are saved on device.
-- Kotlin / Compose handles presentation, Java owns the plate model and persistence, and Rust via JNI performs rarity rolls, number generation, country/region selection, category selection and reward calculation.
-- Java fallback keeps the game playable in IDE runs where the native library is unavailable.
+- Starting money: **$3,000**.
+- Tapping the main button adds a generated plate to the inventory. It does not pay money and does not spend the wallet balance.
+- Each item has a market value; an ordinary plate starts at about **$100**. Higher rarity and special categories change its valuation.
+- Sell plates individually from the Inventory screen to add the sale amount to the wallet.
+- Expand garage capacity from 30 to 150 items, upgrade odds for rare combinations, and improve collector connections to increase sale offers.
+- Sales apply the current collector-connection bonus to both old and new plates.
+- The display uses country-specific layouts and familiar number patterns for Russia, Ukraine, Germany, Japan, the USA, the UK, France, the UAE, Poland and Italy.
+- Seven rarity tiers, category filters, rare-result animation and sound feedback are included. A rarity animation changes the plate card in place and does not open a modal.
+- Balance, upgrades, sound settings and inventory are stored locally. Legacy save data is migrated to the dollar economy with $3,000 starting balance.
 
-All plate numbers and special series are generated for the game. They are fictional and do not identify real vehicles, people, registrations or government vehicles.
+Generated combinations and special government-themed series are fictional and are not actual issued registrations.
 
-## Build APK manually
+## Build the APK manually
 
-The workflow does not run on each push. To build when you choose:
+The GitHub Actions workflow is **manual only**; commits and pull requests do not start a build.
 
-1. Open the repository's Actions tab: https://github.com/cuuw619-maker/NClicker/actions
-2. Select Android APK.
-3. Click Run workflow and choose the main branch.
+1. Open Actions: https://github.com/cuuw619-maker/NClicker/actions
+2. Select **Android APK**.
+3. Click **Run workflow** and choose `main`.
 4. Wait for the run to complete successfully.
-5. Download the NClicker-debug-apk artifact and extract app-debug.apk.
+5. Download the `NClicker-debug-apk` artifact and extract `app-debug.apk`.
 
-The workflow installs Java 17, Android SDK 35 and NDK 27.2; runs Rust unit tests; compiles the JNI library for arm64-v8a; runs Gradle assembleDebug; and uploads the APK. Minimum Android version is Android 8.0 / API 26.
-
-## Local development
-
-Open the project in Android Studio with JDK 17 and Android SDK 35. The Java engine falls back if the Rust native library is not available in an IDE run.
-
-To build the Rust JNI library locally on Linux with the Android NDK:
-
-    rustup target add aarch64-linux-android
-    export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
-    export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
-    cargo test --manifest-path rust/Cargo.toml
-    cargo build --target aarch64-linux-android --release --manifest-path rust/Cargo.toml
-    mkdir -p app/src/main/jniLibs/arm64-v8a
-    cp rust/target/aarch64-linux-android/release/libplate_engine.so app/src/main/jniLibs/arm64-v8a/
-    gradle --no-daemon assembleDebug
+The workflow sets up Java 17, Android SDK 35 and NDK 27.2; runs Rust unit tests; compiles the ARM64 JNI library; runs `gradle assembleDebug`; and uploads the APK. Minimum Android version: Android 8.0 / API 26.
 
 ## Technology
 
-- Kotlin 2.0.21 / Jetpack Compose / Material 3: presentation layer.
-- Java 17: game model, game-engine facade and local collection persistence.
-- Rust with JNI: weighted rarity, plate generation, country/region selection, special categories and reward calculation.
-- Android Gradle Plugin 8.7.3.
+- **Kotlin / Jetpack Compose / Material 3:** Android presentation, layout, transitions and navigation.
+- **Java 17:** immutable plate model, generation bridge/fallback, wallet economics, sale-price calculations, upgrade costs and persistent inventory.
+- **Rust / JNI:** weighted rarity, country and region selection, country-specific number patterns, categories and market-value generation.
+
+To run the Rust tests locally: `cargo test --manifest-path rust/Cargo.toml`.
