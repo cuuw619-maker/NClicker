@@ -23,13 +23,17 @@ All numbers and special-series designs are randomly generated for the game. They
 4. Open the completed run and download **NClicker-debug-apk** from **Artifacts**.
 5. Extract the artifact and install app-debug.apk on an Android device (Android 8.0/API 26 or newer).
 
-The workflow installs Java 17, Android SDK 35, NDK 27.2, Rust and cargo-ndk, compiles the Rust library for arm64-v8a, then runs Gradle assembleDebug.
+The workflow installs Java 17, Android SDK 35, NDK 27.2, Rust and the Android NDK linker, compiles the Rust library for arm64-v8a, then runs Gradle assembleDebug.
 
 ## Local development
 
-Open this repository in a recent Android Studio with JDK 17 and Android SDK 35 installed. The app has a Kotlin fallback when the Rust native library has not been built locally; the supplied Actions workflow builds and packages it. To reproduce the full native build, install Rust, the Android NDK and cargo-ndk, then run:
+Open this repository in a recent Android Studio with JDK 17 and Android SDK 35 installed. The app has a Kotlin fallback when the Rust native library has not been built locally; the supplied Actions workflow builds and packages it. To reproduce the full native build, install Rust with the aarch64-linux-android target and the Android NDK, then run the following commands from the repository root:
 
-    cargo ndk -t arm64-v8a -o app/src/main/jniLibs build --release --manifest-path rust/Cargo.toml
+    export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+    export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+    cargo build --target aarch64-linux-android --release --manifest-path rust/Cargo.toml
+    mkdir -p app/src/main/jniLibs/arm64-v8a
+    cp rust/target/aarch64-linux-android/release/libplate_engine.so app/src/main/jniLibs/arm64-v8a/
 
 Then build the debug APK from Android Studio or with Gradle 8.10.2:
 
