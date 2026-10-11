@@ -176,6 +176,9 @@ fun NClickerApp() {
         val owned = collection.firstOrNull { it.id == plate.id } ?: return
         val price = PlateEngine.salePrice(owned, brokerLevel)
         collection = collection.filterNot { it.id == owned.id }
+        if (currentPlate.id == owned.id) {
+            currentPlate = collection.firstOrNull() ?: PlateCatalog.preview()
+        }
         balance = if (Long.MAX_VALUE - balance < price) Long.MAX_VALUE else balance + price
         lastAction = "Продан ${owned.number}: +${formatCurrency(price)}"
         if (soundEnabled) SoundEffects.play(owned.rarity)
