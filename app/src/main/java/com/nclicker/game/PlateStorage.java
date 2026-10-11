@@ -26,6 +26,9 @@ public final class PlateStorage {
                 JSONObject item = array.optJSONObject(index);
                 if (item == null) continue;
                 PlateRarity rarity = PlateRarity.fromName(item.optString("rarity", "COMMON"));
+                long value = item.has("marketValue")
+                        ? item.optLong("marketValue", rarity.getBaseValue())
+                        : rarity.getBaseValue();
                 result.add(new Plate(
                         item.optString("id", "saved-" + index),
                         item.optString("country", "Неизвестно"),
@@ -35,7 +38,7 @@ public final class PlateStorage {
                         item.optString("number", "NC 000"),
                         item.optString("type", "Гражданский"),
                         rarity,
-                        item.optLong("reward", rarity.getReward())
+                        value
                 ));
             }
             return result;
@@ -60,7 +63,7 @@ public final class PlateStorage {
                     item.put("number", plate.getNumber());
                     item.put("type", plate.getType());
                     item.put("rarity", plate.getRarity().name());
-                    item.put("reward", plate.getReward());
+                    item.put("marketValue", plate.getMarketValue());
                     array.put(item);
                 } catch (Exception ignored) {
                     // Keep the rest of the serializable collection.
