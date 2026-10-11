@@ -149,10 +149,8 @@ fn generate_plate(seed: u64, luck: u32, bonus: u32) -> String {
     let region = country.regions[rng.range(country.regions.len() as u64) as usize];
     let number = make_number(&mut rng, country.code, region);
     let bonus_percent = 100_u64.saturating_add(bonus.min(60) as u64 * 35);
-    let reward = RARITY_REWARDS[rarity_index]
-        .saturating_mul(bonus_percent)
-        .saturating_div(100)
-        .max(1);
+    let reward = (RARITY_REWARDS[rarity_index]
+        .saturating_mul(bonus_percent) / 100).max(1);
     let id = format!("NC-{}-{:08X}", country.code, (rng.next_u64() & 0xFFFF_FFFF) as u32);
 
     // Interpolated data comes only from static catalogues and our own
